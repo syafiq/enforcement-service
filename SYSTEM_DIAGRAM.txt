@@ -1,0 +1,227 @@
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          COMPLETE SYSTEM OVERVIEW                           │
+│                   WASMHAL + Enforcement Service Architecture                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+                    ┌────────────────────────────────────┐
+                    │   Centralized Policy Authority    │
+                    │  (Organization-level Governance)  │
+                    └────────────────────────────────────┘
+                                    │
+                                    │ YAML Policies
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      ENFORCEMENT SERVICE (NEW!)                             │
+│                        enforcement-service/                                  │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Policy Engine (config.rs)                                          │     │
+│  │  • Load entity policies from YAML                                  │     │
+│  │  • Validate configurations                                         │     │
+│  │  • Define capabilities per entity                                  │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Enforcement Engine (service.rs)                                    │     │
+│  │  • Session management (UUID-based)                                 │     │
+│  │  • Rate limiting (ops/sec + burst)                                 │     │
+│  │  • Quota tracking (bytes + operations)                             │     │
+│  │  • Audit logging (complete trail)                                  │     │
+│  │  • HAL provider factory (restricted instances)                     │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ HTTP API Server (api.rs) - Port 8080                               │     │
+│  │  POST /api/v1/hal/access         → Create session                  │     │
+│  │  GET  /api/v1/hal/capabilities   → Query entity caps               │     │
+│  │  GET  /api/v1/entities           → List all entities               │     │
+│  │  GET  /api/v1/audit              → Get audit logs                  │     │
+│  │  GET  /api/v1/stats              → Service metrics                 │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Restricted HAL Access
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           WASM COMPONENTS                                   │
+│                                                                              │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐          │
+│  │  crypto-worker   │  │ attestation-svc  │  │  untrusted-app   │          │
+│  ├──────────────────┤  ├──────────────────┤  ├──────────────────┤          │
+│  │ Granted:         │  │ Granted:         │  │ Granted:         │          │
+│  │  ✓ crypto        │  │  ✓ platform      │  │  ✓ random        │          │
+│  │  ✓ random        │  │  ✓ capabilities  │  │  ✓ clock         │          │
+│  │  ✓ clock         │  │  ✓ random        │  │                  │          │
+│  │                  │  │                  │  │ Denied:          │          │
+│  │ Denied:          │  │ Denied:          │  │  ✗ crypto        │          │
+│  │  ✗ storage       │  │  ✗ crypto        │  │  ✗ storage       │          │
+│  │  ✗ sockets       │  │  ✗ storage       │  │  ✗ sockets       │          │
+│  │  ✗ gpu           │  │  ✗ sockets       │  │  ✗ gpu           │          │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘          │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Via HalProvider
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        ELASTIC TEE HAL (EXISTING)                           │
+│                              wasmhal/                                        │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Core Platform (src/platform.rs)                                    │     │
+│  │  • Auto-detect AMD SEV-SNP / Intel TDX                             │     │
+│  │  • Platform initialization                                         │     │
+│  │  • Capability discovery                                            │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Modular Interfaces (src/interfaces.rs + src/providers.rs)         │     │
+│  │                                                                     │     │
+│  │  Traits:                    Default Providers:                     │     │
+│  │  • PlatformInterface        • DefaultPlatformProvider              │     │
+│  │  • CapabilitiesInterface    • DefaultCapabilitiesProvider          │     │
+│  │  • CryptoInterface          • DefaultCryptoProvider                │     │
+│  │  • RandomInterface          • DefaultRandomProvider                │     │
+│  │  • ClockInterface           • DefaultClockProvider                 │     │
+│  │  • StorageInterface         • (Storage provider TBD)               │     │
+│  │  • SocketInterface          • (Socket provider TBD)                │     │
+│  │  • GpuInterface             • (GPU provider TBD)                   │     │
+│  │  • ResourceInterface        • (Resource provider TBD)              │     │
+│  │  • EventInterface           • (Event provider TBD)                 │     │
+│  │  • CommunicationInterface   • (Communication provider TBD)         │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ 11 HAL Interfaces (src/)                                           │     │
+│  │  • platform.rs       - Attestation & platform info                 │     │
+│  │  • capabilities.rs   - Feature discovery                           │     │
+│  │  • crypto.rs         - Ed25519, AES, ChaCha, SHA, HMAC            │     │
+│  │  • random.rs         - Hardware RNG (RDRAND/RDSEED)                │     │
+│  │  • clock.rs          - System/monotonic time                       │     │
+│  │  • storage.rs        - AES-GCM encrypted storage                   │     │
+│  │  • sockets.rs        - TCP/UDP/TLS/DTLS                           │     │
+│  │  • gpu.rs            - Compute pipelines                           │     │
+│  │  • resources.rs      - Memory/CPU tracking                         │     │
+│  │  • events.rs         - Priority-based pub/sub                      │     │
+│  │  • communication.rs  - Inter-workload messaging                    │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ WIT Interfaces (wit-modular/)                                      │     │
+│  │  • Modular .wit files per interface                                │     │
+│  │  • Composed worlds (minimal, full, specialized)                    │     │
+│  │  • WASI 0.2 compatible                                             │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │ Built-in Enforcement Layer (src/enforcement/) - INTERNAL           │     │
+│  │  • policy.rs    - Policy definitions                               │     │
+│  │  • engine.rs    - Policy engine                                    │     │
+│  │  • wrappers.rs  - Rate limiting/quota wrappers                     │     │
+│  │  • audit.rs     - Audit logging                                    │     │
+│  │  NOTE: This is internal to HAL. The NEW enforcement-service/      │     │
+│  │        provides external, centralized enforcement.                 │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Platform-specific
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         TEE HARDWARE PLATFORMS                              │
+│                                                                              │
+│  ┌──────────────────────┐              ┌──────────────────────┐             │
+│  │    AMD SEV-SNP       │              │     Intel TDX        │             │
+│  ├──────────────────────┤              ├──────────────────────┤             │
+│  │ ✅ Fully Implemented │              │ ✅ Fully Implemented │             │
+│  │                      │              │                      │             │
+│  │ • /dev/sev-guest     │              │ • /dev/tdx_guest     │             │
+│  │ • TSM attestation    │              │ • TSM integration    │             │
+│  │ • Real detection     │              │ • RDRAND/RDSEED      │             │
+│  │ • Guest measurement  │              │ • TD Quote gen       │             │
+│  │                      │              │ • MRTD/RTMR          │             │
+│  └──────────────────────┘              └──────────────────────┘             │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+
+KEY RELATIONSHIPS:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ENFORCEMENT SERVICE vs BUILT-IN ENFORCEMENT                                 │
+│                                                                             │
+│ Built-in (src/enforcement/):                                                │
+│  • Internal to HAL library                                                  │
+│  • For programmatic use within HAL                                          │
+│  • Policy defined in code                                                   │
+│  • Example: examples/enforcement_demo.rs                                    │
+│                                                                             │
+│ NEW Enforcement Service (enforcement-service/):                             │
+│  • Standalone software/service                                              │
+│  • External to HAL (sits on top)                                            │
+│  • Policy from centralized YAML files                                       │
+│  • HTTP API for remote access                                               │
+│  • Session management                                                       │
+│  • Multi-entity support                                                     │
+│  • Production-ready deployment                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+EXAMPLE POLICY FLOW:
+
+1. Organization defines policy:
+   policies/production.yaml
+   ├── crypto-worker:     [crypto, random, clock]
+   ├── attestation-svc:   [platform, capabilities]
+   └── untrusted-app:     [random]
+
+2. Enforcement service loads policy:
+   cargo run -- --policy policies/production.yaml --port 8080
+
+3. WASM component requests access:
+   POST /api/v1/hal/access
+   {"entity_id": "crypto-worker"}
+
+4. Service creates restricted HAL:
+   HalProvider {
+     crypto: Some(...),
+     random: Some(...),
+     clock: Some(...),
+     storage: None,  // Not granted
+     sockets: None,  // Not granted
+     ...
+   }
+
+5. WASM component uses HAL:
+   hal.crypto.hash(data, "SHA-256")  ✅ Allowed
+   hal.storage.write(...)            ✗ None (not granted)
+
+
+DEPLOYMENT OPTIONS:
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Option 1: Standalone HTTP Service                              │
+│                                                                 │
+│   enforcement-service (HTTP Server)                             │
+│         ↓                                                       │
+│   WASM components connect via HTTP API                          │
+│   Each component gets session + restricted HAL                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Option 2: Embedded Library                                      │
+│                                                                 │
+│   use hal_enforcement_service::EnforcementService;             │
+│   let service = EnforcementService::from_file("policy.yaml");  │
+│   let hal = service.create_restricted_hal("entity-id");        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Option 3: Multi-Tenant Platform                                 │
+│                                                                 │
+│          enforcement-service                                    │
+│                 │                                               │
+│   ┌─────────────┼─────────────┐                                │
+│   │             │             │                                │
+│ Tenant A    Tenant B      Tenant C                             │
+│ (crypto)    (storage)     (random)                             │
+└─────────────────────────────────────────────────────────────────┘
+```

@@ -1,0 +1,215 @@
+version: "1.0"
+
+# Production-ready policy configuration
+# Use this as a template for production deployments
+
+settings:
+  default_rate_limit: 1000
+  audit_log_path: "/var/log/hal-enforcement/audit.log"
+  strict_mode: true  # Always deny unknown entities in production
+
+entities:
+  # =============================================================================
+  # Administrative Entities
+  # =============================================================================
+  
+  - id: "platform-admin"
+    description: "Platform administrator with full HAL access"
+    capabilities:
+      platform: true
+      capabilities: true
+      crypto: true
+      random: true
+      clock: true
+      storage: true
+      sockets: true
+      gpu: true
+      resources: true
+      events: true
+      communication: true
+    can_grant: true
+    rate_limits:
+      platform:
+        operations_per_second: 100
+        burst_size: 200
+
+  # =============================================================================
+  # Core Services
+  # =============================================================================
+  
+  - id: "attestation-service"
+    description: "Platform attestation and verification service"
+    capabilities:
+      platform: true
+      capabilities: true
+      crypto: true  # For signature verification
+      random: true  # For nonce generation
+      clock: true
+    rate_limits:
+      platform:
+        operations_per_second: 50
+        burst_size: 100
+      crypto:
+        operations_per_second: 200
+        burst_size: 400
+
+  - id: "key-management-service"
+    description: "Centralized key management and cryptographic operations"
+    capabilities:
+      crypto: true
+      random: true
+      storage: true  # For key storage
+      clock: true
+    rate_limits:
+      crypto:
+        operations_per_second: 5000
+        burst_size: 10000
+      storage:
+        operations_per_second: 1000
+        burst_size: 2000
+    quotas:
+      storage:
+        max_bytes: 104857600     # 100 MB for keys
+        max_operations: 1000000
+      crypto:
+        max_operations: 10000000
+
+  - id: "secure-storage-service"
+    description: "Encrypted data storage service"
+    capabilities:
+      storage: true
+      crypto: true
+      clock: true
+    rate_limits:
+      storage:
+        operations_per_second: 2000
+        burst_size: 4000
+      crypto:
+        operations_per_second: 2000
+        burst_size: 4000
+    quotas:
+      storage:
+        max_bytes: 10737418240   # 10 GB
+        max_operations: 10000000
+
+  - id: "network-gateway"
+    description: "Secure network communication gateway"
+    capabilities:
+      sockets: true
+      crypto: true
+      clock: true
+    rate_limits:
+      sockets:
+        operations_per_second: 50000
+        burst_size: 100000
+      crypto:
+        operations_per_second: 20000
+        burst_size: 40000
+
+  # =============================================================================
+  # Application Services
+  # =============================================================================
+  
+  - id: "user-authentication-service"
+    description: "User authentication and session management"
+    capabilities:
+      crypto: true
+      random: true
+      storage: true
+      clock: true
+    rate_limits:
+      crypto:
+        operations_per_second: 1000
+        burst_size: 2000
+      storage:
+        operations_per_second: 500
+        burst_size: 1000
+    quotas:
+      storage:
+        max_bytes: 52428800      # 50 MB
+        max_operations: 500000
+
+  - id: "data-processing-service"
+    description: "Data processing and analytics"
+    capabilities:
+      crypto: true
+      storage: true
+      gpu: true  # For ML workloads
+      resources: true
+      clock: true
+    rate_limits:
+      storage:
+        operations_per_second: 5000
+        burst_size: 10000
+      gpu:
+        operations_per_second: 100
+        burst_size: 200
+    quotas:
+      storage:
+        max_bytes: 1073741824    # 1 GB
+        max_operations: 5000000
+
+  # =============================================================================
+  # Monitoring and Observability
+  # =============================================================================
+  
+  - id: "metrics-collector"
+    description: "System metrics collection and monitoring"
+    capabilities:
+      resources: true
+      clock: true
+      storage: true
+    rate_limits:
+      resources:
+        operations_per_second: 100
+        burst_size: 200
+      storage:
+        operations_per_second: 1000
+        burst_size: 2000
+
+  - id: "audit-logger"
+    description: "Centralized audit logging service"
+    capabilities:
+      storage: true
+      clock: true
+      crypto: true  # For log signing
+    rate_limits:
+      storage:
+        operations_per_second: 10000
+        burst_size: 20000
+    quotas:
+      storage:
+        max_bytes: 10737418240   # 10 GB for logs
+        max_operations: 100000000
+
+  # =============================================================================
+  # External/Untrusted Services
+  # =============================================================================
+  
+  - id: "third-party-app-001"
+    description: "Verified third-party application (limited access)"
+    capabilities:
+      random: true
+      clock: true
+      crypto: true  # Limited crypto
+    rate_limits:
+      random:
+        operations_per_second: 100
+        burst_size: 200
+      crypto:
+        operations_per_second: 100
+        burst_size: 200
+    quotas:
+      crypto:
+        max_bytes: 1048576       # 1 MB
+        max_operations: 10000
+
+  - id: "untrusted-sandbox"
+    description: "Sandboxed environment for untrusted code"
+    capabilities:
+      random: true
+      clock: true
+    rate_limits:
+      random:
+        operations_per_second: 50
+        burst_size: 75

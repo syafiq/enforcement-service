@@ -1,0 +1,93 @@
+version: "1.0"
+
+# Global settings
+settings:
+  default_rate_limit: 100
+  audit_log_path: "./logs/audit.log"
+  strict_mode: true
+
+# Entity definitions
+entities:
+  # Supervisor with full access
+  - id: "supervisor"
+    description: "Administrative entity with full HAL access"
+    capabilities:
+      platform: true
+      capabilities: true
+      crypto: true
+      random: true
+      clock: true
+      storage: true
+      sockets: true
+      gpu: true
+      resources: true
+      events: true
+      communication: true
+    can_grant: true
+
+  # Crypto worker - specialized for cryptographic operations
+  - id: "crypto-worker"
+    description: "Dedicated cryptographic service"
+    capabilities:
+      crypto: true
+      random: true
+      clock: true
+    rate_limits:
+      crypto:
+        operations_per_second: 1000
+        burst_size: 2000
+    quotas:
+      crypto:
+        max_bytes: 10485760      # 10 MB
+        max_operations: 100000
+
+  # Attestation service - minimal privileges
+  - id: "attestation-service"
+    description: "Platform attestation service"
+    capabilities:
+      platform: true
+      capabilities: true
+      random: true  # For nonce generation
+    rate_limits:
+      platform:
+        operations_per_second: 10
+        burst_size: 20
+
+  # Storage service
+  - id: "storage-service"
+    description: "Encrypted storage service"
+    capabilities:
+      storage: true
+      crypto: true
+      clock: true
+    rate_limits:
+      storage:
+        operations_per_second: 500
+        burst_size: 1000
+    quotas:
+      storage:
+        max_bytes: 1073741824    # 1 GB
+        max_operations: 50000
+
+  # Network proxy
+  - id: "network-proxy"
+    description: "Network communication proxy"
+    capabilities:
+      sockets: true
+      crypto: true  # For TLS
+      clock: true
+    rate_limits:
+      sockets:
+        operations_per_second: 10000
+        burst_size: 20000
+
+  # Untrusted application - very limited
+  - id: "untrusted-app"
+    description: "Untrusted workload with minimal access"
+    capabilities:
+      random: true
+      clock: true
+    rate_limits:
+      random:
+        operations_per_second: 100
+        burst_size: 150

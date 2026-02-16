@@ -1,0 +1,28 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Audit files
+audit.log
+*.audit
+
+# Test artifacts
+*.profraw
+*.profdata
