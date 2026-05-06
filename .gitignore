@@ -26,3 +26,6 @@ audit.log
 # Test artifacts
 *.profraw
 *.profdata
+
+# Generated demo WASMs
+demo-wasms/
