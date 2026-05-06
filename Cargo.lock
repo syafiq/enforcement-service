@@ -810,6 +810,7 @@ dependencies = [
  "elastic-tee-hal",
  "env_logger",
  "log",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -819,6 +820,7 @@ dependencies = [
  "tower 0.4.13",
  "tower-http 0.5.2",
  "uuid",
+ "wasmparser 0.219.2",
 ]
 
 [[package]]
@@ -828,6 +830,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
+ "serde",
 ]
 
 [[package]]
@@ -2375,6 +2378,20 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.219.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5220ee4c6ffcc0cb9d7c47398052203bc902c8ef3985b0c8134118440c0b2921"
+dependencies = [
+ "ahash",
+ "bitflags",
+ "hashbrown 0.14.5",
+ "indexmap",
+ "semver",
+ "serde",
 ]
 
 [[package]]
