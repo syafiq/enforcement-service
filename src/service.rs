@@ -1,13 +1,12 @@
 //! Enforcement service implementation
 
-use crate::config::{PolicyConfig, EntityConfig};
+use crate::analyzer::{LlmAnalyzer, MockAnalyzer};
+use crate::config::{CapabilitiesConfig, EnforcementMode, EntityConfig, PolicyConfig};
 use crate::error::{EnforcementError, Result};
-use elastic_tee_hal::interfaces::{HalProvider, PlatformInterface, CryptoInterface, RandomInterface, ClockInterface};
-use elastic_tee_hal::providers::*;
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc, Duration};
 use uuid::Uuid;
 
 /// Session information
@@ -16,9 +15,23 @@ pub struct Session {
     pub session_id: Uuid,
     pub entity_id: String,
     pub granted_capabilities: Vec<String>,
+    /// Which mode produced `granted_capabilities` for this session. Recorded
+    /// on every session so audit logs can tell at a glance whether a grant
+    /// came from a hand-written YAML or from an LLM analysis.
+    pub policy_source: PolicySource,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub operation_count: u64,
+}
+
+/// Origin of a session's capability set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicySource {
+    /// Capabilities came from the YAML `capabilities` block.
+    Manual,
+    /// Capabilities were produced by an LLM analyser. `model` is the
+    /// identifier used; recorded for audit.
+    Auto { model: String },
 }
 
 /// Audit event
@@ -39,176 +52,196 @@ pub struct EnforcementService {
     sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
     audit_log: Arc<RwLock<Vec<AuditEvent>>>,
     operation_counters: Arc<RwLock<HashMap<String, OperationCounter>>>,
+    /// Backend used for `EnforcementMode::Auto`. Defaults to [`MockAnalyzer`]
+    /// so the service is usable out-of-the-box; deployments wire in a real
+    /// LLM client via [`EnforcementService::with_analyzer`].
+    analyzer: Arc<dyn LlmAnalyzer>,
 }
 
 #[derive(Debug)]
 struct OperationCounter {
     count: u64,
     last_reset: DateTime<Utc>,
+    #[allow(dead_code)]
     rate_limit: u64,
 }
 
 impl EnforcementService {
-    /// Create a new enforcement service with the given policy
+    /// Create a new enforcement service with the given policy. Uses the
+    /// default [`MockAnalyzer`] for `Auto`-mode entities; replace it with
+    /// [`Self::with_analyzer`] before serving real traffic.
     pub fn new(policy: PolicyConfig) -> Result<Self> {
         policy.validate()?;
-        
+
         Ok(Self {
             policy,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             audit_log: Arc::new(RwLock::new(Vec::new())),
             operation_counters: Arc::new(RwLock::new(HashMap::new())),
+            analyzer: Arc::new(MockAnalyzer),
         })
     }
-    
-    /// Load policy from file
+
+    /// Load policy from file (uses the default mock analyser).
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let policy = PolicyConfig::from_file(path)?;
         Self::new(policy)
     }
-    
-    /// Create a new session for an entity
-    pub async fn create_session(&self, entity_id: &str) -> Result<Session> {
-        // Find entity in policy
-        let entity = self.policy.find_entity(entity_id)
-            .ok_or_else(|| {
-                if self.policy.settings.strict_mode {
-                    EnforcementError::EntityNotFound(entity_id.to_string())
-                } else {
-                    // In non-strict mode, we could create a default restricted entity
-                    EnforcementError::EntityNotFound(entity_id.to_string())
-                }
-            })?;
-        
+
+    /// Replace the LLM analyser used for `Auto`-mode entities.
+    pub fn with_analyzer(mut self, analyzer: Arc<dyn LlmAnalyzer>) -> Self {
+        self.analyzer = analyzer;
+        self
+    }
+
+    /// Decide the capability set for an entity at session-creation time.
+    ///
+    /// * `Manual` mode: returns the YAML `capabilities` block verbatim.
+    /// * `Auto`   mode: forwards the (decrypted) WASM bytes to the
+    ///   configured [`LlmAnalyzer`] and returns its verdict. If
+    ///   `wasm_bytes` is `None`, the call fails — auto mode requires a
+    ///   workload to analyse.
+    ///
+    /// The two paths are mutually exclusive; there is no intersection or
+    /// human-set upper bound applied to the auto verdict.
+    pub async fn resolve_capabilities(
+        &self,
+        entity_id: &str,
+        wasm_bytes: Option<&[u8]>,
+    ) -> Result<(CapabilitiesConfig, PolicySource)> {
+        let entity = self
+            .policy
+            .find_entity(entity_id)
+            .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
+
+        match &entity.mode {
+            EnforcementMode::Manual => {
+                Ok((entity.capabilities.clone(), PolicySource::Manual))
+            }
+            EnforcementMode::Auto { model } => {
+                let bytes = wasm_bytes.ok_or_else(|| {
+                    EnforcementError::Policy(format!(
+                        "entity '{}' is in auto mode but no WASM bytes were supplied",
+                        entity_id
+                    ))
+                })?;
+                let caps = self.analyzer.analyze(model, bytes).await?;
+                Ok((caps, PolicySource::Auto { model: model.clone() }))
+            }
+        }
+    }
+
+    /// Create a new session for an entity. For `Manual` entities `wasm_bytes`
+    /// may be `None`; for `Auto` entities it must be `Some`.
+    pub async fn create_session_with_wasm(
+        &self,
+        entity_id: &str,
+        wasm_bytes: Option<&[u8]>,
+    ) -> Result<Session> {
+        // Existence check (also gives us a nice error in non-strict mode).
+        let _entity = self
+            .policy
+            .find_entity(entity_id)
+            .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
+
+        let (caps, source) = self.resolve_capabilities(entity_id, wasm_bytes).await?;
+
         let session_id = Uuid::new_v4();
         let now = Utc::now();
-        let expires_at = now + Duration::hours(24); // 24 hour session
-        
+        let expires_at = now + Duration::hours(24);
+
         let session = Session {
             session_id,
             entity_id: entity_id.to_string(),
-            granted_capabilities: entity.capabilities.list_granted(),
+            granted_capabilities: caps.list_granted(),
+            policy_source: source.clone(),
             created_at: now,
             expires_at,
             operation_count: 0,
         };
-        
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session_id, session.clone());
-        
+
+        self.sessions.write().await.insert(session_id, session.clone());
+
         log::info!(
-            "Created session {} for entity {} with capabilities: {:?}",
+            "Created session {} for entity {} (source={:?}) with capabilities: {:?}",
             session_id,
             entity_id,
+            source,
             session.granted_capabilities
         );
-        
+
         Ok(session)
     }
-    
+
+    /// Convenience wrapper: create a session for a `Manual`-mode entity.
+    /// Fails if the entity is in `Auto` mode (use
+    /// [`Self::create_session_with_wasm`] for that).
+    pub async fn create_session(&self, entity_id: &str) -> Result<Session> {
+        self.create_session_with_wasm(entity_id, None).await
+    }
+
     /// Get session information
     pub async fn get_session(&self, session_id: Uuid) -> Result<Session> {
         let sessions = self.sessions.read().await;
-        let session = sessions.get(&session_id)
+        let session = sessions
+            .get(&session_id)
             .ok_or_else(|| EnforcementError::Session("Session not found".to_string()))?;
-        
-        // Check if expired
+
         if Utc::now() > session.expires_at {
             return Err(EnforcementError::Session("Session expired".to_string()));
         }
-        
+
         Ok(session.clone())
     }
-    
-    /// Create a restricted HAL provider for an entity
-    pub async fn create_restricted_hal(&self, entity_id: &str) -> Result<HalProvider> {
-        let entity = self.policy.find_entity(entity_id)
-            .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
-        
-        let mut hal = HalProvider::new();
-        
-        // Platform interface
-        if entity.capabilities.platform {
-            match DefaultPlatformProvider::new() {
-                Ok(platform) => {
-                    hal.platform = Some(Box::new(platform));
-                    log::debug!("Granted platform capability to {}", entity_id);
-                }
-                Err(e) => {
-                    log::warn!("Failed to create platform provider for {}: {}", entity_id, e);
-                }
-            }
-        }
-        
-        // Capabilities interface
-        if entity.capabilities.capabilities {
-            hal.capabilities = Some(Box::new(DefaultCapabilitiesProvider::new()));
-            log::debug!("Granted capabilities capability to {}", entity_id);
-        }
-        
-        // Crypto interface
-        if entity.capabilities.crypto {
-            hal.crypto = Some(Box::new(DefaultCryptoProvider::new()));
-            log::debug!("Granted crypto capability to {}", entity_id);
-        }
-        
-        // Random interface
-        if entity.capabilities.random {
-            hal.random = Some(Box::new(DefaultRandomProvider::new()));
-            log::debug!("Granted random capability to {}", entity_id);
-        }
-        
-        // Clock interface
-        if entity.capabilities.clock {
-            hal.clock = Some(Box::new(DefaultClockProvider::new()));
-            log::debug!("Granted clock capability to {}", entity_id);
-        }
-        
-        // Storage interface (when implemented)
-        if entity.capabilities.storage {
-            log::debug!("Storage capability requested for {} (not yet implemented)", entity_id);
-        }
-        
-        Ok(hal)
-    }
-    
-    /// Check if entity has a specific capability
+
+    /// Check if entity has a specific capability **in `Manual` mode**.
+    ///
+    /// In `Auto` mode the capability set is per-session (it depends on the
+    /// WASM bytes), so this method has no answer outside of a session and
+    /// returns an error.
     pub fn has_capability(&self, entity_id: &str, capability: &str) -> Result<bool> {
-        let entity = self.policy.find_entity(entity_id)
+        let entity = self
+            .policy
+            .find_entity(entity_id)
             .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
-        
-        Ok(entity.capabilities.has_capability(capability))
+
+        match &entity.mode {
+            EnforcementMode::Manual => Ok(entity.capabilities.has_capability(capability)),
+            EnforcementMode::Auto { .. } => Err(EnforcementError::Policy(format!(
+                "entity '{}' is in auto mode; capabilities are per-session",
+                entity_id
+            ))),
+        }
     }
-    
+
     /// Check rate limit for an entity
     pub async fn check_rate_limit(&self, entity_id: &str, interface: &str) -> Result<()> {
-        let entity = self.policy.find_entity(entity_id)
+        let entity = self
+            .policy
+            .find_entity(entity_id)
             .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
-        
-        // Get rate limit for this interface
+
         let rate_limit = if let Some(limit_config) = entity.rate_limits.get(interface) {
             limit_config.operations_per_second
         } else {
             self.policy.settings.default_rate_limit
         };
-        
+
         let mut counters = self.operation_counters.write().await;
         let key = format!("{}:{}", entity_id, interface);
-        
+
         let now = Utc::now();
         let counter = counters.entry(key.clone()).or_insert(OperationCounter {
             count: 0,
             last_reset: now,
             rate_limit,
         });
-        
-        // Reset counter if a second has passed
+
         if (now - counter.last_reset).num_seconds() >= 1 {
             counter.count = 0;
             counter.last_reset = now;
         }
-        
-        // Check if limit exceeded
+
         if counter.count >= rate_limit {
             return Err(EnforcementError::RateLimitExceeded {
                 entity: entity_id.to_string(),
@@ -218,11 +251,11 @@ impl EnforcementService {
                 ),
             });
         }
-        
+
         counter.count += 1;
         Ok(())
     }
-    
+
     /// Log an audit event
     pub async fn audit(
         &self,
@@ -242,59 +275,47 @@ impl EnforcementService {
             success,
             error,
         };
-        
-        let mut log = self.audit_log.write().await;
-        log.push(event);
+
+        self.audit_log.write().await.push(event);
     }
-    
+
     /// Get audit log for an entity
     pub async fn get_audit_log(&self, entity_id: Option<&str>, limit: usize) -> Vec<AuditEvent> {
         let log = self.audit_log.read().await;
-        
+
         let filtered: Vec<_> = if let Some(id) = entity_id {
-            log.iter()
-                .filter(|e| e.entity_id == id)
-                .cloned()
-                .collect()
+            log.iter().filter(|e| e.entity_id == id).cloned().collect()
         } else {
             log.iter().cloned().collect()
         };
-        
-        // Return most recent entries
-        filtered.into_iter()
-            .rev()
-            .take(limit)
-            .collect()
+
+        filtered.into_iter().rev().take(limit).collect()
     }
-    
+
     /// List all entities in the policy
     pub fn list_entities(&self) -> Vec<String> {
-        self.policy.entities.iter()
-            .map(|e| e.id.clone())
-            .collect()
+        self.policy.entities.iter().map(|e| e.id.clone()).collect()
     }
-    
+
     /// Get entity configuration
     pub fn get_entity_config(&self, entity_id: &str) -> Option<&EntityConfig> {
         self.policy.find_entity(entity_id)
     }
-    
+
     /// Get active sessions count
     pub async fn active_sessions_count(&self) -> usize {
         let sessions = self.sessions.read().await;
         let now = Utc::now();
-        sessions.values()
-            .filter(|s| s.expires_at > now)
-            .count()
+        sessions.values().filter(|s| s.expires_at > now).count()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
-    async fn test_enforcement_service() {
+    async fn manual_mode_grants_yaml_capabilities() {
         let yaml = r#"
 version: "1.0"
 entities:
@@ -303,28 +324,63 @@ entities:
     capabilities:
       crypto: true
       random: true
-    rate_limits:
-      crypto:
-        operations_per_second: 100
-        burst_size: 200
 "#;
-        
+
         let policy = PolicyConfig::from_yaml(yaml).unwrap();
         let service = EnforcementService::new(policy).unwrap();
-        
-        // Test session creation
+
         let session = service.create_session("test-entity").await.unwrap();
-        assert_eq!(session.entity_id, "test-entity");
+        assert_eq!(session.policy_source, PolicySource::Manual);
         assert_eq!(session.granted_capabilities.len(), 2);
-        
-        // Test capability check
+        assert!(session.granted_capabilities.contains(&"crypto".to_string()));
+        assert!(session.granted_capabilities.contains(&"random".to_string()));
+
         assert!(service.has_capability("test-entity", "crypto").unwrap());
         assert!(!service.has_capability("test-entity", "storage").unwrap());
-        
-        // Test HAL creation
-        let hal = service.create_restricted_hal("test-entity").await.unwrap();
-        assert!(hal.crypto.is_some());
-        assert!(hal.random.is_some());
-        assert!(hal.storage.is_none());
+    }
+
+    #[tokio::test]
+    async fn auto_mode_consults_analyzer_only() {
+        // YAML grants nothing; auto mode should still produce a non-empty
+        // capability set because the (mock) analyser grants all.
+        let yaml = r#"
+version: "1.0"
+entities:
+  - id: "auto-entity"
+    description: "LLM-driven"
+    mode:
+      kind: auto
+      model: "test-model"
+    capabilities: {}
+"#;
+
+        let policy = PolicyConfig::from_yaml(yaml).unwrap();
+        let service = EnforcementService::new(policy).unwrap();
+
+        // No WASM bytes → auto mode must refuse.
+        let err = service.create_session("auto-entity").await.unwrap_err();
+        match err {
+            EnforcementError::Policy(_) => {}
+            e => panic!("expected Policy error, got {:?}", e),
+        }
+
+        // With WASM bytes → analyser produces caps; YAML is ignored.
+        let wasm = b"\0asm\x01\x00\x00\x00";
+        let session = service
+            .create_session_with_wasm("auto-entity", Some(wasm))
+            .await
+            .unwrap();
+        assert_eq!(
+            session.policy_source,
+            PolicySource::Auto {
+                model: "test-model".to_string()
+            }
+        );
+        // MockAnalyzer grants all 11 capabilities.
+        assert_eq!(session.granted_capabilities.len(), 11);
+
+        // has_capability is undefined in auto mode (per-session).
+        assert!(service.has_capability("auto-entity", "crypto").is_err());
     }
 }
+

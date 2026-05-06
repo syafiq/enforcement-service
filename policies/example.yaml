@@ -91,3 +91,12 @@ entities:
       random:
         operations_per_second: 100
         burst_size: 150
+
+  # Auto-mode entity - capabilities decided per-session by an LLM analyser
+  # of the (decrypted) WASM bytes. The `capabilities` block is ignored.
+  - id: "auto-analysed-app"
+    description: "LLM-driven capability resolution; no human-set upper bound"
+    mode:
+      kind: auto
+      model: "gpt-4o-2024-11-20"
+    capabilities: {}

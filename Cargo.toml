@@ -32,6 +32,9 @@ colored = "2.1"
 thiserror = "1.0"
 anyhow = "1.0"
 
+# Async traits (used by LlmAnalyzer)
+async-trait = "0.1"
+
 # HTTP server (for API)
 axum = "0.7"
 tower = "0.4"

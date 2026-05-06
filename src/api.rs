@@ -1,9 +1,8 @@
 //! HTTP API for the enforcement service
 
-use crate::service::{EnforcementService, Session};
-use crate::error::Result;
+use crate::service::EnforcementService;
 use axum::{
-    extract::{State, Query},
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -12,6 +11,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+// Local two-argument Result alias used by the axum handlers below. Avoids
+// clashing with `crate::error::Result<T>` (which is single-argument).
+type ApiResult<T> = std::result::Result<T, AppError>;
 
 /// API state
 pub struct ApiState {
@@ -87,7 +90,7 @@ async fn health_check() -> impl IntoResponse {
 async fn create_hal_access(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<CreateAccessRequest>,
-) -> Result<Json<CreateAccessResponse>, AppError> {
+) -> ApiResult<Json<CreateAccessResponse>> {
     let session = state.service.create_session(&req.entity_id).await?;
     
     Ok(Json(CreateAccessResponse {
@@ -101,7 +104,7 @@ async fn create_hal_access(
 async fn get_capabilities(
     State(state): State<Arc<ApiState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> ApiResult<Json<serde_json::Value>> {
     let entity_id = params.get("entity_id")
         .ok_or_else(|| crate::error::EnforcementError::Config("entity_id required".to_string()))?;
     

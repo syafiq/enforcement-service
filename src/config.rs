@@ -49,7 +49,26 @@ pub struct EntityConfig {
     
     #[serde(default)]
     pub description: String,
-    
+
+    /// How this entity's capabilities are decided.
+    ///
+    /// * `Manual` (default) — capabilities come from the YAML `capabilities`
+    ///   block below. The operator is responsible for getting it right; if
+    ///   the WASM workload tries to use something that wasn't granted it
+    ///   simply fails at the HAL boundary.
+    /// * `Auto`  — capabilities are derived at session-creation time by an
+    ///   LLM analysing the (decrypted) WASM bytes. The YAML `capabilities`
+    ///   block is **not** consulted in this mode; the model is the sole
+    ///   policy source. This implements the "no upper bound, model is
+    ///   trusted" position agreed for ELASTIC.
+    ///
+    /// The two modes are mutually exclusive; there is no intersection.
+    #[serde(default)]
+    pub mode: EnforcementMode,
+
+    /// Capabilities granted to this entity in `Manual` mode. Ignored when
+    /// `mode = Auto`.
+    #[serde(default)]
     pub capabilities: CapabilitiesConfig,
     
     #[serde(default)]
@@ -60,6 +79,32 @@ pub struct EntityConfig {
     
     #[serde(default)]
     pub can_grant: bool,
+}
+
+/// How an entity's capability set is decided.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum EnforcementMode {
+    /// Capabilities come from the YAML `capabilities` field.
+    Manual,
+    /// Capabilities are produced by an LLM analyser, given the WASM bytes
+    /// at session-creation time. `model` is an opaque identifier (e.g.
+    /// `"gpt-4o-2024-11-20"`, `"claude-3-7-sonnet"`); interpretation is up
+    /// to the configured `LlmAnalyzer` implementation.
+    Auto {
+        #[serde(default = "default_model")]
+        model: String,
+    },
+}
+
+fn default_model() -> String {
+    "default".to_string()
+}
+
+impl Default for EnforcementMode {
+    fn default() -> Self {
+        EnforcementMode::Manual
+    }
 }
 
 /// Capabilities configuration
