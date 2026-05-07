@@ -2,6 +2,7 @@
 
 use crate::analyzer::{LlmAnalyzer, MockAnalyzer};
 use crate::config::{CapabilitiesConfig, EnforcementMode, EntityConfig, PolicyConfig};
+use crate::enforcer::check_workload;
 use crate::error::{EnforcementError, Result};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
@@ -132,7 +133,10 @@ impl EnforcementService {
     }
 
     /// Create a new session for an entity. For `Manual` entities `wasm_bytes`
-    /// may be `None`; for `Auto` entities it must be `Some`.
+    /// may be `None`; for `Auto` entities it must be `Some`. When
+    /// `wasm_bytes` is supplied, the workload's imports are checked
+    /// against the resolved capability set and the call fails if any
+    /// import requires a capability that wasn't granted.
     pub async fn create_session_with_wasm(
         &self,
         entity_id: &str,
@@ -145,6 +149,11 @@ impl EnforcementService {
             .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
 
         let (caps, source) = self.resolve_capabilities(entity_id, wasm_bytes).await?;
+
+        // Enforce: workload imports must all be covered by `caps`.
+        if let Some(bytes) = wasm_bytes {
+            check_workload(bytes, &caps)?;
+        }
 
         let session_id = Uuid::new_v4();
         let now = Utc::now();

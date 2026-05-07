@@ -1,0 +1,11 @@
+version: "1.0"
+# Frozen from LLM verdict — see audit trail below.
+# source_wasm: demo-wasms/crypto-only.wasm
+# model: deepseek-chat
+# generated: 2026-05-07T14:18:27.316561644+00:00
+entities:
+  - id: "frozen-app"
+    description: "Frozen from demo-wasms/crypto-only.wasm"
+    capabilities:
+      crypto: true
+      random: true

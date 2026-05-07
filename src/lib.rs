@@ -6,12 +6,14 @@
 
 pub mod analyzer;
 pub mod config;
+pub mod enforcer;
 pub mod service;
 pub mod api;
 pub mod error;
 
 pub use analyzer::{LlmAnalyzer, MockAnalyzer};
 pub use config::{CapabilitiesConfig, EnforcementMode, EntityConfig, PolicyConfig};
+pub use enforcer::{check_workload, extract_imports, import_to_capability};
 pub use error::{EnforcementError, Result};
 pub use service::{EnforcementService, PolicySource, Session};
 

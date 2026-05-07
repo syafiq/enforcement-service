@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Demo driver for screen recording. Pre-builds everything, then walks the
-# four on-camera "shots" with ENTER pauses between them.
+# Demo driver — two demos:
 #
-# Required env (DeepSeek shown; any OpenAI-compatible endpoint works):
+#   Demo 1: Manual mode. Hand-written YAML; one workload passes,
+#           a second is refused at session creation.
+#
+#   Demo 2: Auto mode + tamper. LLM verdict is frozen into a YAML
+#           policy. The original workload passes. A modified WASM
+#           with one extra import is refused.
+#
+# Required env (only for Demo 2):
 #   OPENAI_API_KEY   e.g. sk-...
 #   LLM_ENDPOINT     e.g. https://api.deepseek.com/v1/chat/completions
 #   LLM_MODEL        e.g. deepseek-chat
@@ -14,13 +20,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "ERROR: OPENAI_API_KEY not set" >&2
-  exit 1
-fi
 : "${LLM_ENDPOINT:=https://api.deepseek.com/v1/chat/completions}"
 : "${LLM_MODEL:=deepseek-chat}"
-export OPENAI_API_KEY LLM_ENDPOINT LLM_MODEL
+export LLM_ENDPOINT LLM_MODEL
 
 AUTO=${1:-}
 pause() {
@@ -34,55 +36,62 @@ shot() {
 }
 
 # ---------------------------------------------------------------------------
-# Pre-build everything silently so on-camera commands don't pause to compile.
+# Pre-build silently so on-camera commands don't pause to compile.
 # ---------------------------------------------------------------------------
 echo ">>> warming caches (silent build)..."
-cargo build --example two_modes_demo                         --quiet
-cargo build --example openai_analyzer  --features openai     --quiet
-cargo run   --example build_demo_wasms                       --quiet >/dev/null
+cargo build --example run_workload                       --quiet
+cargo build --example freeze_policy   --features openai  --quiet
+cargo run   --example build_demo_wasms                   --quiet >/dev/null
 clear
 
-# ---------------------------------------------------------------------------
-# Shot 1 — the policy file
-# ---------------------------------------------------------------------------
-shot "Shot 1 — Policy file (manual entries + one auto entry)"
+############################################################################
+# DEMO 1 — Manual mode
+############################################################################
+
+shot "Demo 1 / Shot 1 — Manual policy"
 if command -v bat >/dev/null 2>&1; then
-  bat --paging=never --style=plain policies/example.yaml | tail -50
+  bat --paging=never --style=plain policies/demo-manual.yaml
 else
-  tail -50 policies/example.yaml
+  cat policies/demo-manual.yaml
 fi
-pause "manual mode + auto refusal"
+pause "matching workload"
 
-# ---------------------------------------------------------------------------
-# Shot 2 — manual mode works, auto without WASM refuses
-# (re-uses the existing two_modes_demo, but only sections 1-3)
-# ---------------------------------------------------------------------------
-shot "Shot 2 — Manual mode grants YAML caps; auto refuses without a workload"
-DEMO_AUTO=1 cargo run --example two_modes_demo --quiet 2>&1 \
-  | sed -n '/=== 2\./,/=== 4\./p' \
-  | sed '/=== 4\./d'
-pause "real LLM verdicts (3 contrasting workloads)"
+shot "Demo 1 / Shot 2 — crypto-only workload against crypto-worker (PASS)"
+cargo run --example run_workload --quiet -- \
+  policies/demo-manual.yaml crypto-worker demo-wasms/crypto-only.wasm
+pause "non-matching workload"
 
-# ---------------------------------------------------------------------------
-# Shot 3 — three real round-trips to the LLM, three different verdicts
-# ---------------------------------------------------------------------------
-for w in sockets-app crypto-only pure-compute; do
-  shot "Shot 3 — $w.wasm   (live $LLM_MODEL call)"
-  cargo run --example openai_analyzer --features openai --quiet \
-    -- "demo-wasms/${w}.wasm"
-  pause "next workload"
-done
+shot "Demo 1 / Shot 3 — sockets-app workload against crypto-worker (DENIED)"
+cargo run --example run_workload --quiet -- \
+  policies/demo-manual.yaml crypto-worker demo-wasms/sockets-app.wasm \
+  || true
+pause "Demo 2"
 
-# ---------------------------------------------------------------------------
-# Shot 4 — wrap-up
-# ---------------------------------------------------------------------------
-shot "Shot 4 — Audit"
-cat <<'EOF'
-Every session records its policy_source:
+############################################################################
+# DEMO 2 — Auto + tamper
+############################################################################
 
-  Manual entity   -> PolicySource::Manual
-  Auto   entity   -> PolicySource::Auto { model: "deepseek-chat" }
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  shot "Demo 2 skipped — set OPENAI_API_KEY to run"
+  exit 0
+fi
 
-Two modes. No intersection. Pick the one that fits the workload.
-EOF
+shot "Demo 2 / Shot 1 — Freeze a policy from the LLM verdict"
+cargo run --example freeze_policy --features openai --quiet -- \
+  demo-wasms/crypto-only.wasm policies/frozen.yaml frozen-app
+pause "run original workload"
+
+shot "Demo 2 / Shot 2 — Original workload against frozen policy (PASS)"
+cargo run --example run_workload --quiet -- \
+  policies/frozen.yaml frozen-app demo-wasms/crypto-only.wasm
+pause "run tampered workload"
+
+shot "Demo 2 / Shot 3 — Tampered workload (extra sock_open import) — DENIED"
+cargo run --example run_workload --quiet -- \
+  policies/frozen.yaml frozen-app demo-wasms/crypto-only-tampered.wasm \
+  || true
+
+shot "End"
+echo "Manual policies and frozen LLM verdicts behave the same way at"
+echo "enforcement time. The model is consulted once, frozen, and audited."
 echo

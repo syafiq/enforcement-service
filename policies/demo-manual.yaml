@@ -1,0 +1,20 @@
+version: "1.0"
+# Demo 1 policy: capabilities written by hand. Two entities. Run a
+# matching workload and a non-matching workload against this file to
+# show "policy permits" and "policy refuses".
+
+settings:
+  strict_mode: true
+
+entities:
+  # Granted exactly what a crypto workload needs.
+  - id: "crypto-worker"
+    description: "Cryptographic operations only"
+    capabilities:
+      crypto: true
+      random: true
+
+  # Granted nothing. Any non-trivial workload will be refused.
+  - id: "no-privs"
+    description: "Zero capabilities"
+    capabilities: {}
