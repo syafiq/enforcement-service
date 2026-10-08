@@ -61,81 +61,25 @@ entities:
     println!("  Granted capabilities: {:?}", session.granted_capabilities);
     println!("  Expires at: {}\n", session.expires_at);
     
-    // 5. Create restricted HAL for crypto-worker
-    println!("Creating restricted HAL for crypto-worker...");
-    let crypto_hal = service.create_restricted_hal("crypto-worker").await?;
-    
-    if crypto_hal.crypto.is_some() {
-        println!("✓ Crypto interface granted");
-    }
-    if crypto_hal.random.is_some() {
-        println!("✓ Random interface granted");
-    }
-    if crypto_hal.clock.is_some() {
-        println!("✓ Clock interface granted");
-    }
-    if crypto_hal.storage.is_none() {
-        println!("✓ Storage interface correctly denied");
-    }
-    println!();
-    
-    // 6. Test crypto operations
-    if let Some(crypto) = &crypto_hal.crypto {
-        println!("Testing crypto operations...");
-        let data = b"Hello, HAL Enforcement!";
-        
-        match crypto.hash(data, "SHA-256") {
-            Ok(hash) => {
-                println!("✓ SHA-256 hash computed: {} bytes", hash.len());
-            }
-            Err(e) => {
-                println!("✗ Hash operation failed: {}", e);
-            }
-        }
-    }
-    
-    // 7. Test random operations
-    if let Some(random) = &crypto_hal.random {
-        println!("Testing random operations...");
-        
-        match random.get_random_bytes(32) {
-            Ok(bytes) => {
-                println!("✓ Generated {} random bytes", bytes.len());
-            }
-            Err(e) => {
-                println!("✗ Random operation failed: {}", e);
-            }
-        }
-    }
-    
-    // 8. Test clock operations
-    if let Some(clock) = &crypto_hal.clock {
-        println!("Testing clock operations...");
-        
-        match clock.system_time() {
-            Ok((secs, nanos)) => {
-                println!("✓ System time: {}.{:09}s", secs, nanos);
-            }
-            Err(e) => {
-                println!("✗ Clock operation failed: {}", e);
-            }
+    // 5. The session carries the capability set; the HAL (WasmHAL's
+    //    enforcement layer) uses it to allow or deny each interface.
+    let granted = &session.granted_capabilities;
+    for iface in ["crypto", "random", "clock", "storage"] {
+        if granted.iter().any(|c| c == iface) {
+            println!("✓ {} interface granted", iface);
+        } else {
+            println!("✓ {} interface correctly denied", iface);
         }
     }
     println!();
-    
-    // 9. Create HAL for minimal-app (should have fewer capabilities)
-    println!("Creating restricted HAL for minimal-app...");
-    let minimal_hal = service.create_restricted_hal("minimal-app").await?;
-    
-    if minimal_hal.crypto.is_none() {
-        println!("✓ Crypto interface correctly denied for minimal-app");
-    }
-    if minimal_hal.random.is_some() {
-        println!("✓ Random interface granted for minimal-app");
-    }
-    println!();
-    
-    // 10. Test rate limiting
+
+    // 6. A session for minimal-app gets fewer capabilities
+    println!("Creating session for minimal-app...");
+    let minimal = service.create_session("minimal-app").await?;
+    println!("✓ Session created: {}", minimal.session_id);
+    println!("  Granted capabilities: {:?}\n", minimal.granted_capabilities);
+
+    // 7. Test rate limiting
     println!("Testing rate limiting...");
     for i in 0..5 {
         match service.check_rate_limit("crypto-worker", "crypto").await {
@@ -145,7 +89,7 @@ entities:
     }
     println!();
     
-    // 11. Test capability checks
+    // 8. Test capability checks
     println!("Testing capability checks...");
     println!("  crypto-worker has crypto? {}", 
         service.has_capability("crypto-worker", "crypto")?);

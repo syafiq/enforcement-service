@@ -40,7 +40,7 @@ async fn test_policy_loading() {
 
 #[tokio::test]
 async fn test_service_creation() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     let entities = service.list_entities();
     assert_eq!(entities.len(), 2);
     assert!(entities.contains(&"test-crypto".to_string()));
@@ -49,7 +49,7 @@ async fn test_service_creation() {
 
 #[tokio::test]
 async fn test_session_management() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     
     // Create session
     let session = service.create_session("test-crypto").await.unwrap();
@@ -63,7 +63,7 @@ async fn test_session_management() {
 
 #[tokio::test]
 async fn test_capability_enforcement() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     
     // test-crypto should have crypto
     assert!(service.has_capability("test-crypto", "crypto").unwrap());
@@ -78,25 +78,24 @@ async fn test_capability_enforcement() {
 }
 
 #[tokio::test]
-async fn test_hal_creation() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
-    
-    // Create HAL for test-crypto
-    let hal = service.create_restricted_hal("test-crypto").await.unwrap();
-    assert!(hal.crypto.is_some());
-    assert!(hal.random.is_some());
-    assert!(hal.clock.is_some());
-    assert!(hal.storage.is_none());
-    
-    // Create HAL for test-minimal
-    let minimal_hal = service.create_restricted_hal("test-minimal").await.unwrap();
-    assert!(minimal_hal.crypto.is_none());
-    assert!(minimal_hal.random.is_some());
+async fn test_session_grants_policy_capabilities() {
+    let service = service_from_yaml(TEST_POLICY).unwrap();
+
+    // The service hands out capability sets; the HAL enforces them.
+    let session = service.create_session("test-crypto").await.unwrap();
+    let granted = &session.granted_capabilities;
+    assert!(granted.contains(&"crypto".to_string()));
+    assert!(granted.contains(&"random".to_string()));
+    assert!(granted.contains(&"clock".to_string()));
+    assert!(!granted.contains(&"storage".to_string()));
+
+    let minimal = service.create_session("test-minimal").await.unwrap();
+    assert_eq!(minimal.granted_capabilities, vec!["random".to_string()]);
 }
 
 #[tokio::test]
 async fn test_rate_limiting() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     
     // First few operations should succeed
     for i in 0..5 {
@@ -111,7 +110,7 @@ async fn test_rate_limiting() {
 
 #[tokio::test]
 async fn test_audit_logging() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     
     let session = service.create_session("test-crypto").await.unwrap();
     
@@ -147,40 +146,15 @@ async fn test_audit_logging() {
 
 #[tokio::test]
 async fn test_strict_mode() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
+    let service = service_from_yaml(TEST_POLICY).unwrap();
     
     // Unknown entity should fail in strict mode
     let result = service.create_session("unknown-entity").await;
     assert!(result.is_err());
 }
 
-#[tokio::test]
-async fn test_crypto_operations() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
-    let hal = service.create_restricted_hal("test-crypto").await.unwrap();
-    
-    if let Some(crypto) = &hal.crypto {
-        let data = b"test data";
-        let result = crypto.hash(data, "SHA-256");
-        assert!(result.is_ok());
-    }
-}
-
-#[tokio::test]
-async fn test_random_operations() {
-    let service = EnforcementService::from_yaml(TEST_POLICY).unwrap();
-    let hal = service.create_restricted_hal("test-minimal").await.unwrap();
-    
-    if let Some(random) = &hal.random {
-        let result = random.get_random_bytes(32);
-        assert!(result.is_ok());
-    }
-}
-
-// Helper for testing
-impl EnforcementService {
-    pub fn from_yaml(yaml: &str) -> Result<Self, hal_enforcement_service::error::EnforcementError> {
-        let policy = PolicyConfig::from_yaml(yaml)?;
-        Self::new(policy)
-    }
+fn service_from_yaml(
+    yaml: &str,
+) -> Result<EnforcementService, hal_enforcement_service::error::EnforcementError> {
+    EnforcementService::new(PolicyConfig::from_yaml(yaml)?)
 }
