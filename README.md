@@ -70,25 +70,26 @@ cargo install --path .
 hal-enforcer --policy policies/my-policies.yaml
 ```
 
-### 3. Use from WASM Components
+### 3. Request HAL Access
+
+A HAL runtime asks the service which HAL interfaces an entity may use:
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/hal/access \
+  -H 'Content-Type: application/json' \
+  -d '{"entity_id": "crypto-worker"}'
+# {"session_id":"…","granted_capabilities":["crypto","random","clock"],"expires_at":"…"}
+```
+
+When the service is embedded as a library, it can also admit a Wasm workload. In that case the module's imports are checked against the entity's capabilities, and the module is rejected if it imports a denied interface:
 
 ```rust
-// In your WASM component
-use hal_enforcement_client::EnforcementClient;
-
-let client = EnforcementClient::new("http://localhost:8080", "crypto-worker");
-
-// Request HAL access (automatically enforced based on policy)
-let hal = client.get_hal_access().await?;
-
-// Use allowed interfaces
-if let Some(crypto) = hal.crypto {
-    let hash = crypto.hash(data, "SHA-256")?;
-}
-
-// Attempting to use denied interfaces returns None
-assert!(hal.storage.is_none()); // Not granted in policy
+let service = EnforcementService::from_file("policies/my-policies.yaml")?;
+let wasm = std::fs::read("app.wasm")?;
+let session = service.create_session_with_wasm("crypto-worker", Some(&wasm)).await?;
 ```
+
+[WasmHAL](https://github.com/elasticproject-eu/wasmhal)'s runtime and enforcement layer then link and enforce only `session.granted_capabilities`. There is no separate client library; any HTTP client can call the API.
 
 ## Architecture
 
@@ -205,48 +206,32 @@ entities:
 
 ## API Endpoints
 
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health` | Liveness check: `{"status":"healthy","service":…,"version":…}` |
+| `POST /api/v1/hal/access` | Create a session for an entity and return its granted capabilities |
+| `GET /api/v1/hal/capabilities?entity_id=<id>` | An entity's capabilities, rate limits and quotas |
+| `GET /api/v1/entities` | The entities in the loaded policy |
+| `GET /api/v1/audit?entity_id=<id>&limit=100` | Recent audit events, optionally for one entity |
+| `GET /api/v1/stats` | Active sessions, number of entities, version |
+
 ### Request HAL Access
 
 ```
 POST /api/v1/hal/access
 Content-Type: application/json
 
-{
-  "entity_id": "crypto-worker",
-  "session_id": "optional-session-id"
-}
+{ "entity_id": "crypto-worker" }
 
 Response:
 {
   "session_id": "uuid-v4",
   "granted_capabilities": ["crypto", "random", "clock"],
-  "rate_limits": { ... },
   "expires_at": "2026-02-16T12:00:00Z"
 }
 ```
 
-### Perform HAL Operation
-
-```
-POST /api/v1/hal/execute
-Content-Type: application/json
-
-{
-  "session_id": "uuid-v4",
-  "interface": "crypto",
-  "operation": "hash",
-  "parameters": {
-    "data": "base64-encoded-data",
-    "algorithm": "SHA-256"
-  }
-}
-```
-
-### Get Audit Log
-
-```
-GET /api/v1/audit?entity_id=crypto-worker&limit=100
-```
+Unknown entities get `404`. Sessions expire after 24 hours.
 
 ## CLI Usage
 
@@ -257,8 +242,8 @@ hal-enforcer --policy policies/production.yaml --port 8080
 # Enable verbose logging
 hal-enforcer --policy policies/dev.yaml --verbose
 
-# Run with custom audit log location
-hal-enforcer --policy policies/prod.yaml --audit-log /var/log/hal-audit.log
+# Choose the port (default 8080)
+hal-enforcer --policy policies/prod.yaml --port 9090
 
 # Validate policy without starting service
 hal-enforcer --policy policies/test.yaml --validate-only
@@ -292,11 +277,92 @@ Different security levels for different zones:
 
 ## Security Considerations
 
-- **Policy File Protection**: Policy files should be read-only and owned by trusted authority
-- **Session Management**: Sessions expire and require re-authentication
-- **Audit Trail**: All operations are logged for compliance
-- **Rate Limiting**: Prevents DoS and resource exhaustion
-- **Capability Isolation**: Entities cannot access denied interfaces
+- **Least privilege:** each entity gets only the HAL interfaces listed in its policy, and Wasm workloads that import other interfaces are rejected at admission.
+- **Network access:** run the service where only the HAL runtime can reach its port.
+- **Policy file:** keep it read-only and owned by the policy authority. Validate changes with `--validate-only`.
+- **Audit log:** events are kept in memory, and are lost on restart.
+
+See [SECURITY.md](SECURITY.md) for the full deployment guidelines and how to report vulnerabilities.
+
+## Deployment
+
+The service is a single, self-contained binary (`hal-enforcer`). It needs no TEE hardware and no root privileges. It is usually deployed next to the HAL runtime, inside the same Confidential VM.
+
+**Requirements:**
+- Rust (stable) to build.
+- A C linker (Debian/Ubuntu: `sudo apt-get install -y build-essential`).
+- Tested on Ubuntu 24.04, including inside AMD SEV-SNP and Intel TDX Confidential VMs on GCP. See [PERFORMANCE.md](PERFORMANCE.md).
+
+**Build and install:**
+
+```bash
+cargo build --release                # binary: target/release/hal-enforcer
+sudo install -m 0755 target/release/hal-enforcer /usr/local/bin/
+```
+
+**Run as a systemd service** (example):
+
+```ini
+# /etc/systemd/system/hal-enforcer.service
+[Unit]
+Description=ELASTIC HAL Enforcement Service
+After=network.target
+
+[Service]
+User=hal-enforcer
+ExecStart=/usr/local/bin/hal-enforcer --policy /etc/hal-enforcer/policy.yaml --port 8080
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Restrict access to the port, for example with a host firewall, so that only the HAL runtime can reach it. Policies are read at start-up, so restart the service after changing the policy.
+
+## Troubleshooting and debugging
+
+### Logging
+
+```bash
+hal-enforcer --policy policy.yaml --verbose       # debug-level logging
+RUST_LOG=hal_enforcement_service=trace hal-enforcer --policy policy.yaml
+```
+
+`--verbose` sets the default log level to `debug`. `RUST_LOG` takes precedence, if set.
+
+### Checking a policy and the running service
+
+```bash
+hal-enforcer --policy policy.yaml --validate-only   # parse and validate, then exit
+hal-enforcer --policy policy.yaml --list-entities   # show entities and their capabilities
+curl -s localhost:8080/health                       # is the service up?
+curl -s localhost:8080/api/v1/stats                 # active sessions and entity count
+curl -s 'localhost:8080/api/v1/audit?limit=20'      # recent audit events
+```
+
+### Common problems
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Start-up fails with a YAML or policy error | Run `--validate-only` to see the exact field. Check the indentation and the capability names (`platform`, `capabilities`, `crypto`, `random`, `clock`, `storage`, `sockets`, `gpu`, `resources`, `events`, `communication`). |
+| `Address already in use` | Another process holds the port. Choose another with `--port`. |
+| `POST /api/v1/hal/access` returns `404 {"error":"<entity id>"}` | The `entity_id` isn't in the loaded policy. Check it with `--list-entities`, and restart the service after editing the policy. |
+| `500 … is in auto mode but no WASM bytes were supplied` | Auto mode needs the Wasm bytes, which the HTTP API does not take. Use `manual` mode, or embed the service as a library. |
+| ``workload imports `…` which requires capability `…`, but the policy did not grant it`` | The workload imports a HAL interface its entity isn't granted. Grant that capability, or remove the import. |
+| A rate-limit error | The entity exceeded `operations_per_second`/`burst_size` for that interface. Adjust `rate_limits` in the policy. |
+
+## Performance
+
+Measured on GCP Confidential VMs (AMD SEV-SNP and Intel TDX):
+
+- **Checks on every HAL call:** a capability check takes 8 ns and a rate-limit check takes 0.26–0.31 µs.
+- **Admitting a workload** (import extraction, policy check and session creation) takes 3–3.5 µs for a small module and 211–241 µs for a 4.2 MiB module with 200 imports.
+- **Rejecting a non-compliant workload** takes about 1.2 µs.
+- **HTTP API throughput:** about 23,000 (SEV-SNP) to 36,000 (TDX) session requests per second with 32 concurrent clients.
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the full results, the method, and how to reproduce them.
 
 ## Development
 
@@ -312,7 +378,12 @@ cargo run -- --policy policies/example.yaml
 
 # Run examples
 cargo run --example basic_usage
+cargo run --release --example perf     # benchmarks, see PERFORMANCE.md
 ```
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

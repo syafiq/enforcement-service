@@ -58,10 +58,10 @@
 │  └────────────────────────────────────────────────────────┘    │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────┐    │
-│  │ HAL Provider Factory                                    │    │
-│  │  - Create restricted HalProvider instances             │    │
-│  │  - Only include granted interfaces                     │    │
-│  │  - Wrap with rate limiting/quota checking              │    │
+│  │ Workload Admission                                     │    │
+│  │  - Extract the Wasm module's HAL imports               │    │
+│  │  - Reject imports outside the granted capabilities     │    │
+│  │  - Rate limiting and quota checking per entity         │    │
 │  └────────────────────────────────────────────────────────┘    │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -80,7 +80,7 @@
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 └──────────────────────────────────────────────────────────────────┘
                               │
-                              │ Via HalProvider trait
+                              │ Granted capabilities (session)
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                      ELASTIC TEE HAL                            │
@@ -151,24 +151,15 @@
 ### 4. Integration with WASMHAL
 
 ```rust
-// Service creates restricted HAL provider
-let hal = service.create_restricted_hal("entity-id").await?;
+// Admission: the workload's imports are checked against the entity's
+// capabilities. A module that imports a denied HAL interface is rejected.
+let wasm = std::fs::read("app.wasm")?;
+let session = service.create_session_with_wasm("entity-id", Some(&wasm)).await?;
 
-// HalProvider contains only granted interfaces
-pub struct HalProvider {
-    pub platform: Option<Box<dyn PlatformInterface>>,
-    pub capabilities: Option<Box<dyn CapabilitiesInterface>>,
-    pub crypto: Option<Box<dyn CryptoInterface>>,
-    pub random: Option<Box<dyn RandomInterface>>,
-    pub clock: Option<Box<dyn ClockInterface>>,
-    pub storage: Option<Box<dyn StorageInterface>>,
-    // ... other interfaces
-}
-
-// WASM component uses only what's granted
-if let Some(crypto) = hal.crypto {
-    crypto.hash(data, "SHA-256")?;
-}
+// The session lists the HAL interfaces the runtime may link for this
+// workload, e.g. ["crypto", "random", "clock"]. WasmHAL's enforcement
+// layer applies them to every HAL call.
+println!("{:?}", session.granted_capabilities);
 ```
 
 ## Data Flow
@@ -202,9 +193,8 @@ if let Some(crypto) = hal.crypto {
    
 2. Service loads entity policy
    
-3. Service creates HalProvider with:
-   - Only granted interfaces instantiated
-   - Others set to None
+3. Service resolves the granted capabilities and, if a Wasm module is
+   supplied, rejects it when it imports an interface outside them
    
 4. Rate limiting wrapper applied
    
@@ -283,8 +273,8 @@ WASM components connect remotely
 use hal_enforcement_service::EnforcementService;
 
 let service = EnforcementService::from_file("policy.yaml")?;
-let hal = service.create_restricted_hal("entity-id").await?;
-// Use hal directly
+let session = service.create_session_with_wasm("entity-id", Some(&wasm)).await?;
+// Link only session.granted_capabilities into the workload
 ```
 
 ### Multi-Tenant Platform
@@ -368,21 +358,12 @@ service.watch_policy("policy.yaml", |new_policy| {
 
 ## Performance Characteristics
 
-### Operation Latency
-- Session creation: <1ms
-- HAL access creation: <10ms
-- Rate limit check: <100μs
-- Audit log write: <500μs (async)
+Measured on AMD SEV-SNP and Intel TDX Confidential VMs:
+- **Checks on every HAL call:** a capability check takes 8 ns and a rate-limit check takes 0.26–0.31 µs.
+- **Workload admission:** 3–3.5 µs for a small module, and 211–241 µs for a 4.2 MiB module with 200 imports.
+- **HTTP throughput:** about 23,000–36,000 session requests per second.
 
-### Memory Usage
-- Base service: ~10MB
-- Per session: ~1KB
-- Per HAL provider: ~100KB
-
-### Throughput
-- Session creation: >10,000/sec
-- HAL operations: >100,000/sec (depends on HAL impl)
-- Rate limit checks: >1,000,000/sec
+See [PERFORMANCE.md](PERFORMANCE.md) for the full results and the method.
 
 ## Future Enhancements
 

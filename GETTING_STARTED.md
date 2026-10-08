@@ -6,7 +6,7 @@ This guide will walk you through setting up and using the HAL Enforcement Servic
 
 - Rust 2021 edition or later
 - Cargo (comes with Rust)
-- Access to the ELASTIC TEE HAL library
+- A C toolchain for linking (Debian/Ubuntu: `sudo apt-get install -y build-essential`)
 
 ## Step 1: Installation
 
@@ -143,14 +143,13 @@ async fn main() -> anyhow::Result<()> {
     // Create session
     let session = service.create_session("my-app").await?;
     
-    // Get restricted HAL
-    let hal = service.create_restricted_hal("my-app").await?;
-    
-    // Use HAL interfaces
-    if let Some(crypto) = hal.crypto {
-        let hash = crypto.hash(b"data", "SHA-256")?;
-        println!("Hash: {:?}", hash);
-    }
+    // The session lists the HAL interfaces granted to my-app
+    println!("Granted: {:?}", session.granted_capabilities);
+
+    // Admit a Wasm workload: rejected if it imports a denied interface
+    let wasm = std::fs::read("my-app.wasm")?;
+    let admitted = service.create_session_with_wasm("my-app", Some(&wasm)).await?;
+    println!("Admitted, session {}", admitted.session_id);
     
     Ok(())
 }

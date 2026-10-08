@@ -125,14 +125,14 @@ curl -X POST http://localhost:8080/api/v1/hal/access \
   -d '{"entity_id": "my-app"}'
 ```
 
-### 4. Get Restricted HAL
+### 4. Admit a Workload
 ```rust
 let service = EnforcementService::from_file("policy.yaml")?;
-let hal = service.create_restricted_hal("my-app").await?;
+let session = service.create_session_with_wasm("my-app", Some(&wasm)).await?;
 
-// Only granted interfaces are available
-assert!(hal.crypto.is_some());
-assert!(hal.storage.is_none());  // Not granted
+// Only granted interfaces are listed; a module importing others is rejected
+assert!(session.granted_capabilities.contains(&"crypto".to_string()));
+assert!(!session.granted_capabilities.contains(&"storage".to_string()));
 ```
 
 ## Use Cases
@@ -185,17 +185,9 @@ async fn main() -> anyhow::Result<()> {
     let session = service.create_session("crypto-worker").await?;
     println!("Session: {}", session.session_id);
     
-    // Get restricted HAL
-    let hal = service.create_restricted_hal("crypto-worker").await?;
-    
-    // Use granted interfaces
-    if let Some(crypto) = hal.crypto {
-        let hash = crypto.hash(b"data", "SHA-256")?;
-        println!("Hash: {:?}", hash);
-    }
-    
-    // Denied interfaces are None
-    assert!(hal.storage.is_none());
+    // Granted interfaces are listed in the session
+    println!("Granted: {:?}", session.granted_capabilities);
+    assert!(!session.granted_capabilities.contains(&"storage".to_string()));
     
     Ok(())
 }
@@ -271,17 +263,7 @@ curl http://localhost:8080/api/v1/stats | jq
 
 ## Integration with WASMHAL
 
-The enforcement service depends on the parent `elastic-tee-hal` crate:
-
-```toml
-[dependencies]
-elastic-tee-hal = { path = ".." }
-```
-
-It uses the modular interface system from WASMHAL:
-- `HalProvider` - Container for interface implementations
-- Trait-based interfaces: `PlatformInterface`, `CryptoInterface`, etc.
-- Default providers: `DefaultPlatformProvider`, `DefaultCryptoProvider`, etc.
+The enforcement service does not link the HAL crate. It decides which HAL interfaces each entity may use, and checks a Wasm workload's imports against those interfaces at admission. WasmHAL's runtime and enforcement layer then link and enforce only the granted interfaces (`session.granted_capabilities`). The capability names match the HAL's WIT interfaces: `platform`, `capabilities`, `crypto`, `random`, `clock`, `storage`, `sockets`, `gpu`, `resources`, `events` and `communication`.
 
 ## Security Features
 
