@@ -116,9 +116,7 @@ impl EnforcementService {
             .ok_or_else(|| EnforcementError::EntityNotFound(entity_id.to_string()))?;
 
         match &entity.mode {
-            EnforcementMode::Manual => {
-                Ok((entity.capabilities.clone(), PolicySource::Manual))
-            }
+            EnforcementMode::Manual => Ok((entity.capabilities.clone(), PolicySource::Manual)),
             EnforcementMode::Auto { model } => {
                 let bytes = wasm_bytes.ok_or_else(|| {
                     EnforcementError::Policy(format!(
@@ -127,7 +125,12 @@ impl EnforcementService {
                     ))
                 })?;
                 let caps = self.analyzer.analyze(model, bytes).await?;
-                Ok((caps, PolicySource::Auto { model: model.clone() }))
+                Ok((
+                    caps,
+                    PolicySource::Auto {
+                        model: model.clone(),
+                    },
+                ))
             }
         }
     }
@@ -169,7 +172,10 @@ impl EnforcementService {
             operation_count: 0,
         };
 
-        self.sessions.write().await.insert(session_id, session.clone());
+        self.sessions
+            .write()
+            .await
+            .insert(session_id, session.clone());
 
         log::info!(
             "Created session {} for entity {} (source={:?}) with capabilities: {:?}",
@@ -392,4 +398,3 @@ entities:
         assert!(service.has_capability("auto-entity", "crypto").is_err());
     }
 }
-

@@ -56,10 +56,7 @@ async fn main() -> anyhow::Result<()> {
     ));
     yaml.push_str("entities:\n");
     yaml.push_str(&format!("  - id: \"{}\"\n", entity_id));
-    yaml.push_str(&format!(
-        "    description: \"Frozen from {}\"\n",
-        wasm_path
-    ));
+    yaml.push_str(&format!("    description: \"Frozen from {}\"\n", wasm_path));
     yaml.push_str("    capabilities:\n");
     for c in &granted {
         yaml.push_str(&format!("      {}: true\n", c));

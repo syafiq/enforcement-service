@@ -30,9 +30,9 @@ async fn main() -> anyhow::Result<()> {
     use hal_enforcement_service::{EnforcementService, PolicyConfig};
     use std::sync::Arc;
 
-    let path = std::env::args().nth(1).ok_or_else(|| {
-        anyhow::anyhow!("usage: openai_analyzer <module.wasm>")
-    })?;
+    let path = std::env::args()
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("usage: openai_analyzer <module.wasm>"))?;
     let wasm = std::fs::read(&path)?;
     println!("loaded {} bytes from {}", wasm.len(), path);
 
@@ -63,8 +63,7 @@ entities:
     }
     println!("using model:    {}", model);
 
-    let service =
-        EnforcementService::new(policy)?.with_analyzer(Arc::new(analyzer));
+    let service = EnforcementService::new(policy)?.with_analyzer(Arc::new(analyzer));
 
     let session = service
         .create_session_with_wasm("auto-app", Some(&wasm))

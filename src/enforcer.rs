@@ -31,8 +31,8 @@ pub fn import_to_capability(module: &str, name: &str) -> Option<&'static str> {
                 Some("storage")
             }
             // Process / environment — treat as platform.
-            "proc_exit" | "proc_raise" | "args_get" | "args_sizes_get"
-            | "environ_get" | "environ_sizes_get" => Some("platform"),
+            "proc_exit" | "proc_raise" | "args_get" | "args_sizes_get" | "environ_get"
+            | "environ_sizes_get" => Some("platform"),
             // Polling / events
             "poll_oneoff" | "sched_yield" => Some("events"),
             _ => None,
@@ -78,12 +78,11 @@ pub struct Violation {
 pub fn extract_imports(wasm: &[u8]) -> Result<Vec<(String, String)>> {
     let mut imports = Vec::new();
     for payload in Parser::new(0).parse_all(wasm) {
-        let payload = payload
-            .map_err(|e| EnforcementError::Policy(format!("invalid WASM: {e}")))?;
+        let payload =
+            payload.map_err(|e| EnforcementError::Policy(format!("invalid WASM: {e}")))?;
         if let Payload::ImportSection(section) = payload {
             for imp in section {
-                let imp = imp
-                    .map_err(|e| EnforcementError::Policy(format!("bad import: {e}")))?;
+                let imp = imp.map_err(|e| EnforcementError::Policy(format!("bad import: {e}")))?;
                 imports.push((imp.module.to_string(), imp.name.to_string()));
             }
         }

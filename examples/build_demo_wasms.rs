@@ -67,8 +67,14 @@ fn main() -> anyhow::Result<()> {
     write("pure-compute.wasm", PURE_COMPUTE)?;
     write("crypto-only-tampered.wasm", CRYPTO_ONLY_TAMPERED)?;
     println!("\nNow point the analyser at each:");
-    println!("  cargo run --example openai_analyzer --features openai -- demo-wasms/sockets-app.wasm");
-    println!("  cargo run --example openai_analyzer --features openai -- demo-wasms/crypto-only.wasm");
-    println!("  cargo run --example openai_analyzer --features openai -- demo-wasms/pure-compute.wasm");
+    println!(
+        "  cargo run --example openai_analyzer --features openai -- demo-wasms/sockets-app.wasm"
+    );
+    println!(
+        "  cargo run --example openai_analyzer --features openai -- demo-wasms/crypto-only.wasm"
+    );
+    println!(
+        "  cargo run --example openai_analyzer --features openai -- demo-wasms/pure-compute.wasm"
+    );
     Ok(())
 }

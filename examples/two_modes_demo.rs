@@ -4,9 +4,7 @@
 //! narrate without racing the terminal. Set `DEMO_AUTO=1` to skip pauses
 //! (useful for dry-runs / CI).
 
-use hal_enforcement_service::{
-    EnforcementError, EnforcementService, PolicyConfig, PolicySource,
-};
+use hal_enforcement_service::{EnforcementError, EnforcementService, PolicyConfig, PolicySource};
 use std::io::{self, BufRead, Write};
 
 fn pause(label: &str) {
@@ -90,22 +88,30 @@ entities:
     // Minimal valid WASM module header. In a real demo, hand it a full
     // module and a real analyser via `EnforcementService::with_analyzer`.
     let wasm_bytes: &[u8] = b"\0asm\x01\x00\x00\x00";
-    println!("calling create_session_with_wasm(\"auto-analysed-app\", {} bytes)",
-        wasm_bytes.len());
+    println!(
+        "calling create_session_with_wasm(\"auto-analysed-app\", {} bytes)",
+        wasm_bytes.len()
+    );
 
     let session = service
         .create_session_with_wasm("auto-analysed-app", Some(wasm_bytes))
         .await?;
     println!("entity            : {}", session.entity_id);
     println!("policy_source     : {:?}", session.policy_source);
-    println!("granted capabilities ({}):", session.granted_capabilities.len());
+    println!(
+        "granted capabilities ({}):",
+        session.granted_capabilities.len()
+    );
     for c in &session.granted_capabilities {
         println!("  - {}", c);
     }
     match &session.policy_source {
         PolicySource::Auto { model } => {
             println!("\nThe YAML capabilities block was empty. Every grant above");
-            println!("was decided by model `{}` from the WASM bytes alone.", model);
+            println!(
+                "was decided by model `{}` from the WASM bytes alone.",
+                model
+            );
         }
         _ => panic!("expected Auto"),
     }

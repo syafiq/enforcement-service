@@ -61,12 +61,14 @@ pub struct AuditLogQuery {
     pub limit: usize,
 }
 
-fn default_limit() -> usize { 100 }
+fn default_limit() -> usize {
+    100
+}
 
 /// Create the API router
 pub fn create_router(service: Arc<EnforcementService>) -> Router {
     let state = Arc::new(ApiState { service });
-    
+
     Router::new()
         .route("/health", get(health_check))
         .route("/api/v1/hal/access", post(create_hal_access))
@@ -92,7 +94,7 @@ async fn create_hal_access(
     Json(req): Json<CreateAccessRequest>,
 ) -> ApiResult<Json<CreateAccessResponse>> {
     let session = state.service.create_session(&req.entity_id).await?;
-    
+
     Ok(Json(CreateAccessResponse {
         session_id: session.session_id,
         granted_capabilities: session.granted_capabilities,
@@ -105,12 +107,15 @@ async fn get_capabilities(
     State(state): State<Arc<ApiState>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let entity_id = params.get("entity_id")
+    let entity_id = params
+        .get("entity_id")
         .ok_or_else(|| crate::error::EnforcementError::Config("entity_id required".to_string()))?;
-    
-    let config = state.service.get_entity_config(entity_id)
+
+    let config = state
+        .service
+        .get_entity_config(entity_id)
         .ok_or_else(|| crate::error::EnforcementError::EntityNotFound(entity_id.clone()))?;
-    
+
     Ok(Json(serde_json::json!({
         "entity_id": entity_id,
         "capabilities": config.capabilities.list_granted(),
@@ -120,11 +125,9 @@ async fn get_capabilities(
 }
 
 /// List all entities
-async fn list_entities(
-    State(state): State<Arc<ApiState>>,
-) -> Json<serde_json::Value> {
+async fn list_entities(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
     let entities = state.service.list_entities();
-    
+
     Json(serde_json::json!({
         "entities": entities,
         "count": entities.len(),
@@ -136,23 +139,26 @@ async fn get_audit_log(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<AuditLogQuery>,
 ) -> Json<serde_json::Value> {
-    let events = state.service.get_audit_log(
-        query.entity_id.as_deref(),
-        query.limit,
-    ).await;
-    
-    let events_json: Vec<_> = events.iter().map(|e| {
-        serde_json::json!({
-            "timestamp": e.timestamp.to_rfc3339(),
-            "entity_id": e.entity_id,
-            "session_id": e.session_id,
-            "interface": e.interface,
-            "operation": e.operation,
-            "success": e.success,
-            "error": e.error,
+    let events = state
+        .service
+        .get_audit_log(query.entity_id.as_deref(), query.limit)
+        .await;
+
+    let events_json: Vec<_> = events
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "timestamp": e.timestamp.to_rfc3339(),
+                "entity_id": e.entity_id,
+                "session_id": e.session_id,
+                "interface": e.interface,
+                "operation": e.operation,
+                "success": e.success,
+                "error": e.error,
+            })
         })
-    }).collect();
-    
+        .collect();
+
     Json(serde_json::json!({
         "events": events_json,
         "count": events_json.len(),
@@ -160,12 +166,10 @@ async fn get_audit_log(
 }
 
 /// Get service statistics
-async fn get_stats(
-    State(state): State<Arc<ApiState>>,
-) -> Json<serde_json::Value> {
+async fn get_stats(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
     let active_sessions = state.service.active_sessions_count().await;
     let total_entities = state.service.list_entities().len();
-    
+
     Json(serde_json::json!({
         "active_sessions": active_sessions,
         "total_entities": total_entities,
@@ -182,19 +186,27 @@ impl IntoResponse for AppError {
             crate::error::EnforcementError::EntityNotFound(ref msg) => {
                 (StatusCode::NOT_FOUND, msg.clone())
             }
-            crate::error::EnforcementError::CapabilityDenied { ref entity, ref capability } => {
-                (StatusCode::FORBIDDEN, format!("{} denied for {}", capability, entity))
-            }
-            crate::error::EnforcementError::RateLimitExceeded { ref entity, ref message } => {
-                (StatusCode::TOO_MANY_REQUESTS, format!("{}: {}", entity, message))
-            }
+            crate::error::EnforcementError::CapabilityDenied {
+                ref entity,
+                ref capability,
+            } => (
+                StatusCode::FORBIDDEN,
+                format!("{} denied for {}", capability, entity),
+            ),
+            crate::error::EnforcementError::RateLimitExceeded {
+                ref entity,
+                ref message,
+            } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("{}: {}", entity, message),
+            ),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.0.to_string()),
         };
-        
+
         let body = Json(serde_json::json!({
             "error": message,
         }));
-        
+
         (status, body).into_response()
     }
 }

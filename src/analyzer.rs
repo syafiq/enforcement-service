@@ -49,7 +49,10 @@ mod tests {
     #[tokio::test]
     async fn mock_analyzer_grants_all() {
         let a = MockAnalyzer;
-        let caps = a.analyze("any-model", b"\0asm\x01\x00\x00\x00").await.unwrap();
+        let caps = a
+            .analyze("any-model", b"\0asm\x01\x00\x00\x00")
+            .await
+            .unwrap();
         // Every flag should be set.
         assert!(caps.crypto);
         assert!(caps.storage);
@@ -95,9 +98,8 @@ mod openai_impl {
     impl OpenAiAnalyzer {
         /// Build from `$OPENAI_API_KEY`.
         pub fn from_env() -> Result<Self> {
-            let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                EnforcementError::Policy("OPENAI_API_KEY not set".to_string())
-            })?;
+            let api_key = std::env::var("OPENAI_API_KEY")
+                .map_err(|_| EnforcementError::Policy("OPENAI_API_KEY not set".to_string()))?;
             Ok(Self::with_api_key(api_key))
         }
 
@@ -121,14 +123,12 @@ mod openai_impl {
         use wasmparser::{Parser, Payload};
         let mut imports = Vec::new();
         for payload in Parser::new(0).parse_all(wasm) {
-            let payload = payload.map_err(|e| {
-                EnforcementError::Policy(format!("invalid WASM: {e}"))
-            })?;
+            let payload =
+                payload.map_err(|e| EnforcementError::Policy(format!("invalid WASM: {e}")))?;
             if let Payload::ImportSection(section) = payload {
                 for imp in section {
-                    let imp = imp.map_err(|e| {
-                        EnforcementError::Policy(format!("bad import: {e}"))
-                    })?;
+                    let imp =
+                        imp.map_err(|e| EnforcementError::Policy(format!("bad import: {e}")))?;
                     imports.push(format!("{}::{}", imp.module, imp.name));
                 }
             }
@@ -183,29 +183,29 @@ include any commentary.";
 
     #[async_trait]
     impl LlmAnalyzer for OpenAiAnalyzer {
-        async fn analyze(
-            &self,
-            model: &str,
-            wasm_bytes: &[u8],
-        ) -> Result<CapabilitiesConfig> {
+        async fn analyze(&self, model: &str, wasm_bytes: &[u8]) -> Result<CapabilitiesConfig> {
             let imports = extract_imports(wasm_bytes)?;
             let user_content = if imports.is_empty() {
                 "WASM module declares no imports.".to_string()
             } else {
-                format!(
-                    "WASM imports ({}):\n{}",
-                    imports.len(),
-                    imports.join("\n")
-                )
+                format!("WASM imports ({}):\n{}", imports.len(), imports.join("\n"))
             };
 
             let req = ChatRequest {
                 model,
                 messages: vec![
-                    Message { role: "system", content: SYSTEM_PROMPT.to_string() },
-                    Message { role: "user", content: user_content },
+                    Message {
+                        role: "system",
+                        content: SYSTEM_PROMPT.to_string(),
+                    },
+                    Message {
+                        role: "user",
+                        content: user_content,
+                    },
                 ],
-                response_format: ResponseFormat { kind: "json_object" },
+                response_format: ResponseFormat {
+                    kind: "json_object",
+                },
                 temperature: 0.0,
             };
 
@@ -226,9 +226,10 @@ include any commentary.";
                 )));
             }
 
-            let parsed: ChatResponse = resp.json().await.map_err(|e| {
-                EnforcementError::Policy(format!("OpenAI bad JSON: {e}"))
-            })?;
+            let parsed: ChatResponse = resp
+                .json()
+                .await
+                .map_err(|e| EnforcementError::Policy(format!("OpenAI bad JSON: {e}")))?;
             let content = parsed
                 .choices
                 .into_iter()

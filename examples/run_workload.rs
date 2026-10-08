@@ -36,8 +36,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("imports :");
         for (m, n) in &imports {
-            let bucket = hal_enforcement_service::import_to_capability(m, n)
-                .unwrap_or("(benign)");
+            let bucket = hal_enforcement_service::import_to_capability(m, n).unwrap_or("(benign)");
             println!("  {}::{}  -> {}", m, n, bucket);
         }
     }

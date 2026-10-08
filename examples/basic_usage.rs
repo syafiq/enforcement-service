@@ -5,9 +5,9 @@ use hal_enforcement_service::{EnforcementService, PolicyConfig};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
-    
+
     println!("=== HAL Enforcement Service - Basic Usage Example ===\n");
-    
+
     // 1. Create a simple policy
     let policy_yaml = r#"
 version: "1.0"
@@ -37,13 +37,13 @@ entities:
         operations_per_second: 50
         burst_size: 100
 "#;
-    
+
     // 2. Load the policy
     println!("Loading policy configuration...");
     let policy = PolicyConfig::from_yaml(policy_yaml)?;
     let service = EnforcementService::new(policy)?;
     println!("✓ Policy loaded\n");
-    
+
     // 3. List entities
     println!("Entities in policy:");
     for entity_id in service.list_entities() {
@@ -53,14 +53,14 @@ entities:
         }
     }
     println!();
-    
+
     // 4. Create session for crypto-worker
     println!("Creating session for crypto-worker...");
     let session = service.create_session("crypto-worker").await?;
     println!("✓ Session created: {}", session.session_id);
     println!("  Granted capabilities: {:?}", session.granted_capabilities);
     println!("  Expires at: {}\n", session.expires_at);
-    
+
     // 5. The session carries the capability set; the HAL (WasmHAL's
     //    enforcement layer) uses it to allow or deny each interface.
     let granted = &session.granted_capabilities;
@@ -77,7 +77,10 @@ entities:
     println!("Creating session for minimal-app...");
     let minimal = service.create_session("minimal-app").await?;
     println!("✓ Session created: {}", minimal.session_id);
-    println!("  Granted capabilities: {:?}\n", minimal.granted_capabilities);
+    println!(
+        "  Granted capabilities: {:?}\n",
+        minimal.granted_capabilities
+    );
 
     // 7. Test rate limiting
     println!("Testing rate limiting...");
@@ -88,20 +91,28 @@ entities:
         }
     }
     println!();
-    
+
     // 8. Test capability checks
     println!("Testing capability checks...");
-    println!("  crypto-worker has crypto? {}", 
-        service.has_capability("crypto-worker", "crypto")?);
-    println!("  crypto-worker has storage? {}", 
-        service.has_capability("crypto-worker", "storage")?);
-    println!("  minimal-app has random? {}", 
-        service.has_capability("minimal-app", "random")?);
-    println!("  minimal-app has crypto? {}", 
-        service.has_capability("minimal-app", "crypto")?);
+    println!(
+        "  crypto-worker has crypto? {}",
+        service.has_capability("crypto-worker", "crypto")?
+    );
+    println!(
+        "  crypto-worker has storage? {}",
+        service.has_capability("crypto-worker", "storage")?
+    );
+    println!(
+        "  minimal-app has random? {}",
+        service.has_capability("minimal-app", "random")?
+    );
+    println!(
+        "  minimal-app has crypto? {}",
+        service.has_capability("minimal-app", "crypto")?
+    );
     println!();
-    
+
     println!("=== Example Complete ===");
-    
+
     Ok(())
 }
